@@ -17,9 +17,11 @@ class Settings:
     state_dir: Path
     html_dump_dir: Path
     screenshot_dir: Path
+    browser_profile_dir: Path
     session_state_file: Path
     latest_json_file: Path
     latest_csv_file: Path
+    latest_sqlite_file: Path
     run_history_file: Path
     max_products: int
     page_size: int
@@ -48,21 +50,15 @@ def load_settings() -> Settings:
 
     html_dump_dir = state_dir / "html_dumps"
     screenshot_dir = state_dir / "screenshots"
+    browser_profile_dir = Path(os.getenv("PETROVICH_BROWSER_PROFILE_DIR", state_dir / "browser_profile"))
 
-    session_state_file = Path(
-        os.getenv("PETROVICH_SESSION_FILE", state_dir / "storage_state.json")
-    )
+    session_state_file = Path(os.getenv("PETROVICH_SESSION_FILE", state_dir / "storage_state.json"))
 
-    latest_json_file = Path(
-        os.getenv("PETROVICH_LATEST_JSON", output_dir / "petrovich_products_latest.json")
-    )
-    latest_csv_file = Path(
-        os.getenv("PETROVICH_LATEST_CSV", output_dir / "petrovich_products_latest.csv")
-    )
+    latest_json_file = Path(os.getenv("PETROVICH_LATEST_JSON", output_dir / "petrovich_products_latest.json"))
+    latest_csv_file = Path(os.getenv("PETROVICH_LATEST_CSV", output_dir / "petrovich_products_latest.csv"))
+    latest_sqlite_file = Path(os.getenv("PETROVICH_LATEST_SQLITE", output_dir / "petrovich_products_latest.sqlite"))
 
-    run_history_file = Path(
-        os.getenv("PETROVICH_RUN_HISTORY", state_dir / "run_history.json")
-    )
+    run_history_file = Path(os.getenv("PETROVICH_RUN_HISTORY", state_dir / "run_history.json"))
 
     return Settings(
         base_url=os.getenv("PETROVICH_BASE_URL", "https://moscow.petrovich.ru"),
@@ -75,9 +71,11 @@ def load_settings() -> Settings:
         state_dir=state_dir,
         html_dump_dir=html_dump_dir,
         screenshot_dir=screenshot_dir,
+        browser_profile_dir=browser_profile_dir,
         session_state_file=session_state_file,
         latest_json_file=latest_json_file,
         latest_csv_file=latest_csv_file,
+        latest_sqlite_file=latest_sqlite_file,
         run_history_file=run_history_file,
         max_products=int(os.getenv("PETROVICH_MAX_PRODUCTS", "500")),
         page_size=int(os.getenv("PETROVICH_PAGE_SIZE", "50")),
@@ -97,5 +95,6 @@ def ensure_directories(settings: Settings) -> None:
         settings.state_dir,
         settings.html_dump_dir,
         settings.screenshot_dir,
+        settings.browser_profile_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)

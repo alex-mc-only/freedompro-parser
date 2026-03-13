@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -30,28 +31,49 @@ class StorageManager:
                 writer.writerow(row.to_dict())
         self.logger.info("Saved CSV output: %s", file_path)
 
+    def write_products_sqlite(self, file_path: Path, rows: list[ProductRecord]) -> None:
+        with sqlite3.connect(file_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS products (
+                  name TEXT NOT NULL,
+                  price TEXT NOT NULL,
+                  article TEXT NOT NULL,
+                  collected_at TEXT NOT NULL,
+                  source_url TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("DELETE FROM products")
+            conn.executemany(
+                "INSERT INTO products (name, price, article, collected_at, source_url) VALUES (?, ?, ?, ?, ?)",
+                [(r.name, r.price, r.article, r.collected_at, r.source_url) for r in rows],
+            )
+            conn.commit()
+        self.logger.info("Saved SQLite output: %s", file_path)
+
     def safe_write_outputs(
         self,
         rows: list[ProductRecord],
         latest_json: Path,
         latest_csv: Path,
+        latest_sqlite: Path,
         timestamp_slug: str,
-    ) -> tuple[Path, Path]:
-        json_timestamped = latest_json.with_name(
-            f"{latest_json.stem}_{timestamp_slug}{latest_json.suffix}"
-        )
-        csv_timestamped = latest_csv.with_name(
-            f"{latest_csv.stem}_{timestamp_slug}{latest_csv.suffix}"
-        )
+    ) -> tuple[Path, Path, Path]:
+        json_timestamped = latest_json.with_name(f"{latest_json.stem}_{timestamp_slug}{latest_json.suffix}")
+        csv_timestamped = latest_csv.with_name(f"{latest_csv.stem}_{timestamp_slug}{latest_csv.suffix}")
+        sqlite_timestamped = latest_sqlite.with_name(f"{latest_sqlite.stem}_{timestamp_slug}{latest_sqlite.suffix}")
 
         self.write_products_json(json_timestamped, rows)
         self.write_products_csv(csv_timestamped, rows)
+        self.write_products_sqlite(sqlite_timestamped, rows)
 
         # Update latest snapshots only on non-empty successful run
         self.write_products_json(latest_json, rows)
         self.write_products_csv(latest_csv, rows)
+        self.write_products_sqlite(latest_sqlite, rows)
 
-        return json_timestamped, csv_timestamped
+        return json_timestamped, csv_timestamped, sqlite_timestamped
 
     def update_run_history(self, result: RunResult, extras: dict[str, Any] | None = None) -> None:
         data = self._read_history()
