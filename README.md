@@ -4,16 +4,6 @@
 
 **Выбранная стратегия: `xvfb + fluxbox + x11vnc (+опционально noVNC) + persistent browser profile + session_state`**.
 
-Почему именно она:
-- прямой API (`requests`) и browser-context API уже подтверждённо дают `403`/антибот;
-- headful bootstrap реально нужен для прохождения антибота;
-- на сервере нет X server, значит нужен виртуальный дисплей;
-- `xvfb + vnc` позволяет пройти антибот **полностью на сервере**, без локального запуска браузера;
-- после прохождения сохраняются:
-  - `storage_state.json` (cookie/storage для fast reuse),
-  - `data/state/browser_profile/` (persistent профиль браузера);
-- дальше `collect` работает как daily job в headless, пока сессия валидна.
-
 ---
 
 ## 2) Architecture decision
@@ -258,3 +248,108 @@ sudo systemctl enable --now petrovich-collector.timer
 - `PETROVICH_REQUEST_RETRIES`
 - `PETROVICH_BACKOFF_BASE_SECONDS`
 - `PETROVICH_MIN_EXPECTED_PRODUCTS`
+
+---
+
+## 12) Быстрый запуск после заливки в GitHub и подтягивания на сервер
+
+Ниже — практический чеклист для ситуации «код уже в GitHub, нужно поднять всё на сервере с нуля».
+
+### 1. Подготовить сервер (один раз)
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3 python3-venv python3-pip xvfb x11vnc fluxbox
+```
+
+### 2. Клонировать проект (первый деплой)
+
+```bash
+cd /opt
+sudo git clone <YOUR_GITHUB_REPO_URL> freedompro-parser
+sudo chown -R $USER:$USER /opt/freedompro-parser
+cd /opt/freedompro-parser
+```
+
+### 3. Обновление проекта (последующие релизы)
+
+```bash
+cd /opt/freedompro-parser
+git fetch --all
+git checkout <YOUR_BRANCH>
+git pull --ff-only
+```
+
+### 4. Поднять Python окружение и зависимости
+
+```bash
+cd /opt/freedompro-parser
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+python -m playwright install chromium
+
+# optional для web-доступа к VNC (noVNC):
+pip install novnc
+```
+
+### 5. Выполнить remote bootstrap (когда нет валидной сессии)
+
+```bash
+cd /opt/freedompro-parser
+source .venv/bin/activate
+WAIT_SECONDS=360 ./scripts/bootstrap_remote_vnc.sh
+```
+
+Что делать дальше:
+- подключиться к VNC `SERVER_IP:5901` (или к noVNC `http://SERVER_IP:6080`, если установлен);
+- в открывшемся Chromium вручную пройти антибот/капчу;
+- дождаться завершения команды.
+
+После этого должны появиться:
+- `data/state/storage_state.json`
+- `data/state/browser_profile/`
+
+### 6. Проверить ручной сбор
+
+```bash
+cd /opt/freedompro-parser
+source .venv/bin/activate
+python main.py collect --verbose
+```
+
+Проверить файлы:
+
+```bash
+ls -lh data/exports/
+cat data/state/run_history.json
+```
+
+### 7. Включить ежедневный запуск
+
+Вариант через cron:
+
+```bash
+crontab -e
+```
+
+Добавить строку:
+
+```cron
+30 3 * * * /bin/bash /opt/freedompro-parser/scripts/run_daily.sh >> /opt/freedompro-parser/data/logs/cron.log 2>&1
+```
+
+### 8. Регулярное обновление после новых коммитов
+
+```bash
+cd /opt/freedompro-parser
+git fetch --all
+git checkout <YOUR_BRANCH>
+git pull --ff-only
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+Если после обновления снова пошли 403/антибот и `collect` перестал собирать — повторите шаг 5 (remote bootstrap).
