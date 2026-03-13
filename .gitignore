@@ -1,2 +1,12 @@
 .venv/
 *.save
+__pycache__/
+*.pyc
+
+# runtime artifacts
+data/logs/*
+data/state/*
+data/exports/*
+!data/logs/.gitkeep
+!data/state/.gitkeep
+!data/exports/.gitkeep
