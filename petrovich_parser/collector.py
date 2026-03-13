@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import Browser, BrowserContext, Error, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, BrowserType, Error, Page, Playwright, sync_playwright
 
 from .config import Settings
 from .models import ProductRecord, utc_now_iso
@@ -47,6 +47,56 @@ class PetrovichCollector:
             finally:
                 browser.close()
 
+    def bootstrap_remote(
+        self,
+        manual_wait_seconds: int = 300,
+        remote_debugging_port: int = 9222,
+    ) -> None:
+        self.logger.info("Remote bootstrap started with persistent profile: %s", self.settings.browser_profile_dir)
+        self.logger.info("CDP endpoint (if port forwarded): http://127.0.0.1:%s", remote_debugging_port)
+
+        with sync_playwright() as playwright:
+            context = self._launch_persistent_context(
+                playwright.chromium,
+                headless=False,
+                remote_debugging_port=remote_debugging_port,
+            )
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(self.settings.base_url, wait_until="domcontentloaded", timeout=self.settings.nav_timeout_ms)
+                self.logger.info(
+                    "Remote bootstrap window is ready. Solve anti-bot via VNC/noVNC and wait %s seconds.",
+                    manual_wait_seconds,
+                )
+                page.wait_for_timeout(manual_wait_seconds * 1000)
+                context.storage_state(path=str(self.settings.session_state_file))
+                self.logger.info("Saved session state to %s", self.settings.session_state_file)
+            finally:
+                context.close()
+
+    def attach_to_existing_browser(self, cdp_url: str, manual_wait_seconds: int = 180) -> None:
+        self.logger.info("Attach mode started: %s", cdp_url)
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(cdp_url)
+            try:
+                if browser.contexts:
+                    context = browser.contexts[0]
+                else:
+                    context = browser.new_context()
+
+                page = context.pages[0] if context.pages else context.new_page()
+                page.bring_to_front()
+                page.goto(self.settings.base_url, wait_until="domcontentloaded", timeout=self.settings.nav_timeout_ms)
+                self.logger.info(
+                    "Attached to running browser. Complete anti-bot if needed. Waiting %s seconds.",
+                    manual_wait_seconds,
+                )
+                page.wait_for_timeout(manual_wait_seconds * 1000)
+                context.storage_state(path=str(self.settings.session_state_file))
+                self.logger.info("Saved session state to %s", self.settings.session_state_file)
+            finally:
+                browser.close()
+
     def collect_daily(self) -> list[ProductRecord]:
         if not self.settings.session_state_file.exists():
             raise FileNotFoundError(
@@ -62,14 +112,31 @@ class PetrovichCollector:
             finally:
                 browser.close()
 
-    def _launch(
-        self,
-        playwright: Playwright,
-        headless: bool,
-        with_state: bool,
-    ) -> tuple[Browser, BrowserContext, Page]:
+    def _launch(self, playwright: Playwright, headless: bool, with_state: bool) -> tuple[Browser, BrowserContext, Page]:
         browser = playwright.chromium.launch(headless=headless)
-        kwargs: dict[str, Any] = {
+        kwargs: dict[str, Any] = self._context_kwargs()
+        if with_state:
+            kwargs["storage_state"] = str(self.settings.session_state_file)
+
+        context = browser.new_context(**kwargs)
+        page = context.new_page()
+        return browser, context, page
+
+    def _launch_persistent_context(
+        self,
+        chromium: BrowserType,
+        headless: bool,
+        remote_debugging_port: int,
+    ) -> BrowserContext:
+        return chromium.launch_persistent_context(
+            user_data_dir=str(self.settings.browser_profile_dir),
+            headless=headless,
+            args=[f"--remote-debugging-port={remote_debugging_port}"],
+            **self._context_kwargs(),
+        )
+
+    def _context_kwargs(self) -> dict[str, Any]:
+        return {
             "viewport": {"width": 1440, "height": 900},
             "locale": "ru-RU",
             "timezone_id": "Europe/Moscow",
@@ -78,12 +145,6 @@ class PetrovichCollector:
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             ),
         }
-        if with_state:
-            kwargs["storage_state"] = str(self.settings.session_state_file)
-
-        context = browser.new_context(**kwargs)
-        page = context.new_page()
-        return browser, context, page
 
     def _collect_from_api_with_retries(self, context: BrowserContext, page: Page) -> list[ProductRecord]:
         rows: list[ProductRecord] = []
@@ -124,12 +185,7 @@ class PetrovichCollector:
 
         return [r for r in rows if r.name and r.article]
 
-    def _request_json_with_backoff(
-        self,
-        context: BrowserContext,
-        page: Page,
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _request_json_with_backoff(self, context: BrowserContext, page: Page, params: dict[str, Any]) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(1, self.settings.request_retries + 1):
             try:
@@ -189,10 +245,7 @@ class PetrovichCollector:
 
         try:
             html_dump.write_text(
-                "<!-- API response snippet -->\n"
-                + response_snippet
-                + "\n\n<!-- Browser page content -->\n"
-                + page.content(),
+                "<!-- API response snippet -->\n" + response_snippet + "\n\n<!-- Browser page content -->\n" + page.content(),
                 encoding="utf-8",
             )
             artifacts.html_dump = html_dump
@@ -216,19 +269,9 @@ class PetrovichCollector:
     def _get_price(product: dict[str, Any]) -> Any:
         price = product.get("price")
         if isinstance(price, dict):
-            return (
-                price.get("gold")
-                or price.get("actual")
-                or price.get("final")
-                or price.get("value")
-            )
+            return price.get("gold") or price.get("actual") or price.get("final") or price.get("value")
         return price
 
     @staticmethod
     def _get_article(product: dict[str, Any]) -> Any:
-        return (
-            product.get("article")
-            or product.get("sku")
-            or product.get("code")
-            or product.get("vendor_code")
-        )
+        return product.get("article") or product.get("sku") or product.get("code") or product.get("vendor_code")
