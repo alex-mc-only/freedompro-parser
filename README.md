@@ -4,16 +4,6 @@
 
 **Выбранная стратегия: `xvfb + fluxbox + x11vnc (+опционально noVNC) + persistent browser profile + session_state`**.
 
-Почему именно она:
-- прямой API (`requests`) и browser-context API уже подтверждённо дают `403`/антибот;
-- headful bootstrap реально нужен для прохождения антибота;
-- на сервере нет X server, значит нужен виртуальный дисплей;
-- `xvfb + vnc` позволяет пройти антибот **полностью на сервере**, без локального запуска браузера;
-- после прохождения сохраняются:
-  - `storage_state.json` (cookie/storage для fast reuse),
-  - `data/state/browser_profile/` (persistent профиль браузера);
-- дальше `collect` работает как daily job в headless, пока сессия валидна.
-
 ---
 
 ## 2) Architecture decision
